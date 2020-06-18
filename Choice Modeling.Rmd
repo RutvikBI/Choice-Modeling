@@ -1,0 +1,214 @@
+---
+title: "Choice Modelling"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r}
+#Step 1 - Load the dataset and quickly examine it
+minivan<-read.csv("minivanconjoint.csv") 
+str(minivan, give.attr = FALSE) 
+head(minivan)
+str(minivan, give.attr = FALSE) 
+```
+
+
+#Step 2 - Load the required libraries
+```{r}
+library(mlogit)
+library(dplyr)
+library(conjoint)
+library(ggplot2)
+```
+
+```{r}
+minivan$seat <- as.factor(minivan$seat)
+```
+
+
+```{r}
+# Print crosstabs of chosen minivan by seats
+chosen_by_seats <- xtabs(choice ~ seat, data=minivan)
+chosen_by_seats
+barplot(chosen_by_seats)
+```
+
+```{r}
+# Print crosstabs of chosen minivan by carpool
+chosen_by_carpool <- xtabs(choice ~ carpool, data=minivan)
+chosen_by_carpool
+```
+
+```{r}
+# Print crosstabs of chosen minivan by cargo
+chosen_by_cargo <- xtabs(choice ~ cargo, data=minivan)
+chosen_by_cargo
+```
+
+```{r}
+# Print crosstabs of chosen minivan by eng
+chosen_by_eng <- xtabs(choice ~ eng, data=minivan)
+chosen_by_eng
+```
+
+```{r}
+# Print crosstabs of chosen minivan by price
+chosen_by_price <- xtabs(choice ~ price, data=minivan)
+chosen_by_price
+```
+
+```{r}
+# Plot the chosen_by_trans object
+barplot(chosen_by_seats)
+```
+
+```{r}
+# load the mlogit library
+library(mlogit)
+
+minivanm1 <- mlogit(choice ~ 0 + cargo +eng +seat + price, data=minivan, alt.var="alt", choice = "choice")
+# summarize the minivanm1 object to see the output
+summary(minivanm1)
+```
+```{r}
+barplot(coef(minivanm1))
+
+```
+
+
+##### willingness to pay
+```{r}
+# Convert data to mlogit.data, varying = 4:8 indicates the attribute columns.
+minivan.ml <- mlogit.data(minivan, shape = 'long', choice = 'choice', alt.var = 'alt', varying = 4:8)
+```
+
+```{r}
+minivan_model <- mlogit(choice ~ 0 + seat + price +cargo + price:eng, data = minivan.ml)
+
+# summarize the m1 object to see the output
+summary(minivan_model)
+```
+
+```{r}
+barplot(coef(minivan_model))
+```
+
+```{r}
+WTPminivan <- coef(minivan_model)/- coef(minivan_model)[3]
+WTPminivan
+```
+
+```{r}
+## Predict choice share based on model
+predict_mnl <- function(model, products) {
+  data.model <- model.matrix(update(model$formula, 0 ~ .), 
+                             data = products)[,-1]
+  utility <- data.model%*%model$coef
+  share <- exp(utility)/sum(exp(utility))
+  cbind(share, products)
+}
+```
+
+
+```{r}
+# Create hypothetical data for choice share prediction
+car <- c(1,2,3)
+price <- c(40, 30, 35)
+seat <- factor(c(8, 6, 7), levels=c(6,7,8))
+eng <- factor(c("elec", "elec","elec"), levels=c("elec", "gas","hyb"))
+cargo <- factor(c("3ft", "2ft", "3ft"), levels=c("2ft", "3ft"))
+carpool <- factor(c("no", "no", "no"), levels=c("no", "yes"))
+prod <- data.frame(car,seat, carpool,cargo, price, eng)
+prod
+```
+
+
+```{r}
+# Predict choice shares of hypothetical 3-option sports car selection
+shares <- predict_mnl(minivan_model, prod)
+shares
+```
+
+```{r}
+#plot it to see it visually
+ggplot(shares, aes(x = car, y = share, fill = car))+
+  geom_bar(stat = 'identity')+
+  ylab('Predicted Market Share')+
+  xlab('Proposed Car Models')+
+  ggtitle('Choice Share of Car Models')
+```
+
+###### Hierarchical Modeling
+
+```{r}
+# Step 4 – setting up the data for the hierarchical choice model, 
+# Prepare data for hierarchical model by recoding the non-binary factors 
+# first run the model to add parameters
+minivan_model2 <- mlogit(choice ~ 0 + seat + price + cargo + price:eng, data = minivan.ml)
+minivan.ml2 <- minivan.ml <- mlogit.data(minivan, shape = 'long', choice = 'choice', alt.var = 'alt', varying = 4:8, id.var = 'resp.id')
+# Set the contrasts for non-binary factor variables to code against the 
+# effects of the baseline level
+contrasts(minivan.ml2$eng) <- contr.sum(levels(minivan.ml2$eng))
+dimnames(contrasts(minivan.ml2$eng))[[2]] <- levels(minivan.ml2$eng)[1:2]
+contrasts(minivan.ml2$seat) <- contr.sum(levels(minivan.ml2$seat))
+dimnames(contrasts(minivan.ml2$seat))[[2]] <- levels(minivan.ml2$seat)[1:2]
+
+# Create character vector of "n" for every independent variable in the model,
+# which will let the hierarchical model know where to use a distribution 
+my_rpar <- rep("n", length(minivan_model2$coef))
+names(my_rpar) <- names(minivan_model2$coef)
+
+# Fit a hierarchical model that assumes a heterogeneity of preferences, 
+# fit a model with the assumption that there may be correlations between 
+# variables. This is stored into sportcar_model2 to keep it separate.
+minivan_model3 <- mlogit(choice ~ 0 + seat + price + cargo + price:eng, data = minivan.ml, panel = TRUE, rpar = my_rpar, correlation = TRUE)
+#This time, we add the following arguments to the mlogit function:
+#panel: We specify this to be TRUE, as we want to use panel techniques to specify that each simulated respondent's decisions will be measured multiple times
+#rpar: We set rpar equal to our custom variable "my_rpar," which is a vector coded with 'n' for every coefficient in #the model, to specify normally distributed random parameters
+#correlation = We set this to TRUE to take into account any correlations that may exist between independent #variables in the model
+# Step 5 – Now let's look at the result of the revised model 
+# Generate model summary
+summary(minivan_model3) 
+```
+
+
+```{r}
+library(MASS)
+
+
+## Build share prediction function
+coef_means <- minivan_model3$coef[1:6]
+Sigma <- cov.mlogit(minivan_model3)
+
+model3_coded <- model.matrix(update(minivan_model3$formula, 0 ~ .), data = prod)[,-1]
+
+share <- matrix(NA, nrow=1000, ncol=nrow(model3_coded))
+
+# Compute a random draw of 1,000 buyers
+for (i in 1:1000) { 
+  # Draw a coefficient vector from the normal distribution
+  coef <- mvrnorm(1, mu=coef_means, Sigma=Sigma)
+  # Compute utilities for those coef
+  utility <- model3_coded %*% coef
+  # Compute probabilites according to logit formula
+  share[i,] <- exp(utility) / sum(exp(utility))
+}  
+
+# examine the output of the N=1000 simulation.the order of results may be 
+# different for your output since this is a simulation.However, the column 
+# means calculated in the next step will be close to the same. 
+
+head(share)
+```
+
+```{r}
+# examine the column means to see if car 1 beats car 2 and car 3.
+new = colMeans(share)
+new
+```
+
+```{r}
+#plot it to see it visually
+barplot(new)
+```
